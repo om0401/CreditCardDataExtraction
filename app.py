@@ -142,7 +142,7 @@ st.markdown("""
 # ---------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------
-st.markdown("<h1>💳 Credit Card Statement Parser</h1>", unsafe_allow_html=True)
+st.markdown("<h1>💳 Sure Financial Credit Card Statement Parser</h1>", unsafe_allow_html=True)
 st.markdown("""
 <div class="highlight-text">
 ✨ <b>Extract, summarize, and visualize data from any issuer's credit card statement with 100% structured accuracy.</b> ✨
