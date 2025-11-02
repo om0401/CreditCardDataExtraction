@@ -112,11 +112,6 @@ st.markdown("""
         border: 1px solid #2a3b6b;
     }
 
-    /* Metric Styling */
-    [data-testid="stMetricValue"] {
-        color: #00E6F6 !important;
-    }
-
     /* Sidebar */
     section[data-testid="stSidebar"] {
         background-color: #0E1428;
@@ -164,7 +159,7 @@ if not groq_key:
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
 
 # ---------------------------------------------------------
-# SIDEBAR FIELD SELECTION (HOVER PANEL)
+# SIDEBAR FIELD SELECTION
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("🧠 Extraction Settings")
@@ -250,7 +245,7 @@ Statement text:
             result = {"raw_output": response_text}
 
         # ---------------------------------------------------------
-        # VISUALIZATION
+        # SHOW RESULTS
         # ---------------------------------------------------------
         st.markdown("### ✅ Extracted Summary")
 
@@ -268,19 +263,7 @@ Statement text:
             st.markdown(html, unsafe_allow_html=True)
 
         # ---------------------------------------------------------
-        # DASHBOARD
-        # ---------------------------------------------------------
-        st.markdown("---")
-        st.subheader("📊 Dashboard Statistics")
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Parsed", 1)
-        col2.metric("Total Balance", result.get("total amount due", "₹0"))
-        col3.metric("Accuracy", "100%")
-
-        st.markdown(f"**Issuer:** {result.get('issuer (bank name)', 'Unknown')}")
-
-        # ---------------------------------------------------------
-        # DOWNLOAD
+        # DOWNLOAD BUTTON
         # ---------------------------------------------------------
         df = pd.DataFrame([result])
         st.download_button(
