@@ -1,0 +1,67 @@
+# =======================================
+# 🧠 Credit Card Data Extraction Project
+# =======================================
+
+# --- Python cache & build files ---
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pdb
+*.egg-info/
+build/
+dist/
+
+# --- Environment files (DO NOT UPLOAD SECRETS) ---
+.env
+.env.*
+*.env
+
+# --- Virtual environments ---
+.venv/
+venv/
+ENV/
+env/
+*.env.bak
+
+# --- IDE / Editor files ---
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Streamlit cache ---
+.streamlit/
+**/.streamlit/secrets.toml
+
+# --- Jupyter / Notebooks (if used) ---
+.ipynb_checkpoints
+*.ipynb
+
+# --- Logs / temp files ---
+logs/
+*.log
+tmp/
+temp/
+*.tmp
+*.bak
+
+# --- OS specific ---
+desktop.ini
+
+# --- PDF Samples (if any local test files) ---
+*.pdf
+
+# --- Reports / Output files ---
+*.csv
+*.json
+*.txt
+*.xlsx
+
+# --- Backup / Archive files ---
+*.zip
+*.tar
+*.tar.gz
+*.7z
+".env" 
