@@ -1,194 +1,132 @@
-import io
-import os
-import re
-import json
-import pdfplumber
-import pytesseract
+import io, os, json, re
+import pdfplumber, pytesseract
 from PIL import Image
 import pandas as pd
 import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
 
-# ---------------------------------------------------------
-# SETUP
-# ---------------------------------------------------------
+# --- Setup ---
 load_dotenv()
 groq_key = os.getenv("GROQ_API_KEY")
-
-st.set_page_config(page_title="💳 Credit Card Statement Parser", page_icon="💳", layout="wide")
+st.set_page_config(page_title="💳 SureFinance Parser", page_icon="💳", layout="wide")
 
 if not groq_key:
-    st.error("⚠️ GROQ_API_KEY missing in `.env`. Please add it.")
-    st.stop()
+    st.error("⚠️ Add GROQ_API_KEY to .env"); st.stop()
 
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
 
-# ---------------------------------------------------------
-# HELPERS
-# ---------------------------------------------------------
+# --- Helpers ---
 def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """Try text layer first, else OCR fallback."""
     texts = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
-            t = page.extract_text()
-            if not t or len(t.strip()) < 40:
+            t = page.extract_text() or ""
+            # if unreadable (Axis Bank style), fallback to OCR
+            if len(t.strip()) < 50 or not re.search(r"[A-Za-z]{3,}", t):
                 img = page.to_image(resolution=300).original
                 t = pytesseract.image_to_string(img)
             texts.append(t)
     return "\n".join(texts)
 
-def clean_transaction_data(df: pd.DataFrame) -> pd.DataFrame:
-    """Fix missing CR/DR, negative signs, or malformed transactions."""
-    if df.empty:
-        return df
-
-    df.columns = [c.lower().strip() for c in df.columns]
-
-    # Normalize 'type' or infer from amount
-    if "type" in df.columns:
-        df["type"] = df["type"].fillna("").str.lower()
-        df["type"] = df["type"].apply(lambda x: "credit" if "cr" in x else ("debit" if "dr" in x else "debit"))
-    else:
-        df["type"] = df["amount"].apply(lambda x: "credit" if str(x).startswith("-") else "debit")
-
-    # Clean amount
-    df["amount"] = (
-        df["amount"].astype(str)
-        .str.replace(",", "")
-        .str.replace("₹", "")
-        .str.extract(r"([\d\.]+)")[0]
-        .astype(float)
-    )
-
-    # Fix multi-line merges
-    df["description"] = df["description"].str.replace("\n", " ").str.strip()
-    df = df.drop_duplicates()
-    return df
-
-def query_groq(prompt: str) -> dict:
-    """Query Groq model with enhanced prompt."""
-    response = client.chat.completions.create(
+def query_groq(prompt: str) -> str:
+    r = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2,
-        max_tokens=1500
+        temperature=0.1, max_tokens=1800
     )
-    text = response.choices[0].message.content
-    try:
-        json_part = text.split("{", 1)[1].rsplit("}", 1)[0]
-        return json.loads("{" + json_part + "}")
-    except Exception:
-        return {"raw_output": text}
+    return r.choices[0].message.content
 
-# ---------------------------------------------------------
-# SIDEBAR
-# ---------------------------------------------------------
+def clean_ai_output(response_text: str) -> dict:
+    """Extract JSON from model output even if wrapped in text."""
+    try:
+        json_part = re.search(r"\{.*\}", response_text, re.S).group(0)
+        data = json.loads(json_part)
+        return data
+    except Exception:
+        return {"raw_output": response_text}
+
+def format_transactions(df: pd.DataFrame):
+    if df.empty: return df
+    df.columns = [c.lower() for c in df.columns]
+    # remove type column entirely if exists
+    if "type" in df.columns:
+        df = df.drop(columns=["type"])
+    # strip whitespace & newlines
+    for c in df.columns:
+        df[c] = df[c].astype(str).str.replace("\n", " ").str.strip()
+    return df
+
+# --- Sidebar ---
 with st.sidebar:
     st.header("🧠 Extraction Settings")
-    issuer = st.checkbox("Issuer (Bank Name)", value=True)
-    customer = st.checkbox("Customer Name", value=True)
-    card_last = st.checkbox("Card Last 4 Digits", value=True)
-    card_variant = st.checkbox("Credit Card Variant", value=True)
-    bill_from = st.checkbox("Billing Cycle From", value=True)
-    bill_to = st.checkbox("Billing Cycle To", value=True)
-    due_date = st.checkbox("Payment Due Date", value=True)
-    total_due = st.checkbox("Total Amount Due", value=True)
-    min_due = st.checkbox("Minimum Amount Due", value=True)
-    transactions = st.checkbox("Transaction Information", value=True)
+    issuer = st.checkbox("Issuer", True)
+    customer = st.checkbox("Customer Name", True)
+    card_last = st.checkbox("Card Last 4", True)
+    card_variant = st.checkbox("Card Variant", True)
+    bill_from = st.checkbox("Billing From", True)
+    bill_to = st.checkbox("Billing To", True)
+    due_date = st.checkbox("Due Date", True)
+    total_due = st.checkbox("Total Due", True)
+    min_due = st.checkbox("Min Due", True)
+    transactions = st.checkbox("Transaction Data", True)
 
 selected_fields = [
     f for f, v in {
-        "issuer": issuer,
-        "customer_name": customer,
-        "card_last_4_digits": card_last,
-        "credit_card_variant": card_variant,
-        "billing_cycle_from": bill_from,
-        "billing_cycle_to": bill_to,
-        "payment_due_date": due_date,
-        "total_amount_due": total_due,
-        "minimum_amount_due": min_due,
-        "transaction_information": transactions
+        "issuer": issuer, "customer_name": customer,
+        "card_last_4_digits": card_last, "credit_card_variant": card_variant,
+        "billing_cycle_from": bill_from, "billing_cycle_to": bill_to,
+        "payment_due_date": due_date, "total_amount_due": total_due,
+        "minimum_amount_due": min_due, "transaction_information": transactions
     }.items() if v
 ]
 
-# ---------------------------------------------------------
-# FILE UPLOAD
-# ---------------------------------------------------------
-uploaded_file = st.file_uploader("📄 Upload Credit Card Statement (PDF)", type=["pdf"])
+# --- File Upload ---
+uploaded_file = st.file_uploader("📄 Upload Credit Card Statement", type=["pdf"])
 
-# ---------------------------------------------------------
-# MAIN EXTRACTION LOGIC
-# ---------------------------------------------------------
+# --- Main Logic ---
 if uploaded_file and st.button("🚀 Extract Data"):
-    with st.spinner("Analyzing statement with AI..."):
+    with st.spinner("Extracting text and analyzing..."):
         pdf_text = extract_text_from_pdf(uploaded_file.read())
 
-        # Enhanced LLM prompt
         prompt = f"""
-You are a financial statement parser.
-Extract the following fields as JSON:
+Extract structured data from this credit card statement.
+Return valid JSON only with keys:
 {', '.join(selected_fields)}.
+For each transaction, include: date, description, amount (as in PDF, e.g. "690.00 CR" if written).
+Do NOT add any 'type' field or modify values.
 
-If there are transactions, output as:
-"transaction_information": [
-  {{
-    "date": "DD/MM/YYYY",
-    "description": "text",
-    "amount": "numeric",
-    "type": "credit/debit"
-  }}
-]
-
-If CR/DR not mentioned, infer type based on description keywords
-like 'payment received', 'refund' = credit, otherwise debit.
-
-Return only valid JSON, no markdown.
-
-Statement:
+Statement text:
 {pdf_text[:7000]}
 """
-        result = query_groq(prompt)
+        response = query_groq(prompt)
+        result = clean_ai_output(response)
 
-        # ---------------------------------------------------------
-        # DISPLAY SUMMARY
-        # ---------------------------------------------------------
         st.markdown("### ✅ Extracted Summary")
         if "raw_output" in result:
             st.warning("⚠️ Model returned unstructured data:")
             st.text(result["raw_output"])
         else:
-            summary_data = {k: v for k, v in result.items() if k != "transaction_information"}
-            html = "<table class='result-table'><tr>"
-            for k in summary_data.keys():
-                html += f"<th>{k}</th>"
-            html += "</tr><tr>"
-            for v in summary_data.values():
-                html += f"<td>{v}</td>"
-            html += "</tr></table>"
-            st.markdown(html, unsafe_allow_html=True)
+            summary = {k:v for k,v in result.items() if k!="transaction_information"}
+            st.dataframe(pd.DataFrame([summary]))
 
-            # ---------------------------------------------------------
-            # DISPLAY TRANSACTIONS
-            # ---------------------------------------------------------
-            if "transaction_information" in result and isinstance(result["transaction_information"], list):
-                st.markdown("### 🧾 Transaction Details (AI Extracted)")
+            if "transaction_information" in result:
                 tx_df = pd.DataFrame(result["transaction_information"])
-                tx_df = clean_transaction_data(tx_df)
+                tx_df = format_transactions(tx_df)
+                st.markdown("### 🧾 Transaction Details")
                 st.dataframe(tx_df, use_container_width=True)
 
                 st.download_button(
                     "💾 Download Transactions (CSV)",
-                    tx_df.to_csv(index=False).encode("utf-8"),
+                    tx_df.to_csv(index=False).encode(),
                     file_name=f"{uploaded_file.name}_transactions.csv",
                     mime="text/csv"
                 )
 
-# ---------------------------------------------------------
-# FOOTER
-# ---------------------------------------------------------
+# --- Footer ---
 st.markdown("""
-<div class="footer">
-🚀 Developed with ❤️ by <b>Om</b> | Groq + Smart Post-Processing | Streamlit ✨
+<div style='text-align:center;color:#00E6F6;margin-top:30px'>
+🚀 Developed with ❤️ by <b>Om</b> | AI-based Credit Card Parser | Streamlit ✨
 </div>
 """, unsafe_allow_html=True)
