@@ -48,20 +48,8 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         letter-spacing: 0.4px;
-        animation: fadeIn 1.5s ease-in-out;
         margin-top: -10px;
         margin-bottom: 25px;
-    }
-
-    div[data-testid="stFileUploader"] {
-        background-color: #10182F;
-        padding: 1em;
-        border-radius: 15px;
-        border: 1px solid #2b3a67;
-        transition: 0.3s;
-    }
-    div[data-testid="stFileUploader"]:hover {
-        border: 1px solid #00E6F6;
     }
 
     .stButton>button {
@@ -129,7 +117,7 @@ st.markdown("""
 st.markdown("<h1>💳 Sure Financial Credit Card Statement Parser</h1>", unsafe_allow_html=True)
 st.markdown("""
 <div class="highlight-text">
-✨ <b>Now supports credit card variant, minimum due, and full transaction extraction!</b> ✨
+✨ <b>Now extracts detailed summary & full transaction data separately!</b> ✨
 </div>
 """, unsafe_allow_html=True)
 
@@ -199,7 +187,7 @@ def query_groq(prompt: str) -> str:
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=800
+        max_tokens=900
     )
     return completion.choices[0].message.content
 
@@ -217,11 +205,11 @@ You are an expert financial document parser.
 Extract the following fields from this credit card statement:
 {', '.join(selected_fields)}.
 
-If 'transaction information' is included, return it as a list of JSON objects with keys:
+If 'transaction information' is included, extract it as a list of JSON objects with keys:
 ["date", "description", "amount", "type (credit/debit)"].
 
 Return only one valid JSON object with these exact keys.
-Do not include any explanation or markdown.
+Do not include any markdown or text explanation.
 
 Statement text:
 {pdf_text[:7000]}
@@ -239,7 +227,7 @@ Statement text:
             result = {"raw_output": response_text}
 
         # ---------------------------------------------------------
-        # SHOW RESULTS
+        # DISPLAY RESULTS (TWO SEPARATE TABLES)
         # ---------------------------------------------------------
         st.markdown("### ✅ Extracted Summary")
 
@@ -247,30 +235,24 @@ Statement text:
             st.warning("⚠️ Model returned unstructured data:")
             st.text(result["raw_output"])
         else:
-            # ✅ Main Summary Table
-            summary_result = result.copy()
-            transactions_data = summary_result.pop("transaction information", None)
+            summary_data = {
+                k: v for k, v in result.items()
+                if k != "transaction information"
+            }
 
-            html = "<table class='result-table'><tr>"
-            for key in summary_result.keys():
-                html += f"<th>{key}</th>"
-            html += "</tr><tr>"
-            for value in summary_result.values():
-                html += f"<td>{value}</td>"
-            html += "</tr></table>"
-            st.markdown(html, unsafe_allow_html=True)
+            # --- SUMMARY TABLE ---
+            summary_df = pd.DataFrame([summary_data])
+            st.markdown("#### 📄 Statement Summary")
+            st.dataframe(summary_df, use_container_width=True)
 
-            # ✅ Show Transactions Below (if present)
-            if transactions_data:
-                try:
-                    st.markdown("### 🧾 Transaction Details")
-                    tx_df = pd.DataFrame(transactions_data)
-                    st.dataframe(tx_df, use_container_width=True)
-                except Exception:
-                    st.warning("⚠️ Could not display transaction data properly.")
+            # --- TRANSACTION TABLE ---
+            if "transaction information" in result and isinstance(result["transaction information"], list):
+                st.markdown("#### 🧾 Transaction Details")
+                tx_df = pd.DataFrame(result["transaction information"])
+                st.dataframe(tx_df, use_container_width=True)
 
         # ---------------------------------------------------------
-        # DOWNLOAD BUTTON
+        # DOWNLOAD BUTTONS
         # ---------------------------------------------------------
         df = pd.DataFrame([result])
         st.download_button(
@@ -285,6 +267,6 @@ Statement text:
 # ---------------------------------------------------------
 st.markdown("""
 <div class="footer">
-🚀 Developed with ❤️ by <b>Om</b> | Powered by <b>Groq’s Llama-3.1-8B-Instant</b> | Streamlit ✨
+🚀 Developed with ❤️ by <b>Om</b> | Powered by <b>Groq Llama-3.1-8B-Instant</b> | Streamlit ✨
 </div>
 """, unsafe_allow_html=True)
