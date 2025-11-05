@@ -8,7 +8,6 @@ import pandas as pd
 import streamlit as st
 from openai import OpenAI
 from dotenv import load_dotenv
-from datetime import datetime
 
 # ---------------------------------------------------------
 # SETUP & CONFIG
@@ -17,7 +16,7 @@ load_dotenv()
 groq_key = os.getenv("GROQ_API_KEY")
 
 st.set_page_config(
-    page_title="💳 SureFinance Credit Card Parser",
+    page_title="💳 Credit Card Statement Parser",
     page_icon="💳",
     layout="wide"
 )
@@ -32,6 +31,7 @@ st.markdown("""
         color: #FFFFFF;
         font-family: 'Poppins', sans-serif;
     }
+
     h1 {
         color: #00E6F6 !important;
         text-align: center;
@@ -39,6 +39,7 @@ st.markdown("""
         font-size: 2.4em !important;
         margin-bottom: 0.3em !important;
     }
+
     .highlight-text {
         text-align: center;
         font-size: 22px;
@@ -47,15 +48,22 @@ st.markdown("""
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
         letter-spacing: 0.4px;
+        animation: fadeIn 1.5s ease-in-out;
         margin-top: -10px;
         margin-bottom: 25px;
     }
+
     div[data-testid="stFileUploader"] {
         background-color: #10182F;
         padding: 1em;
         border-radius: 15px;
         border: 1px solid #2b3a67;
+        transition: 0.3s;
     }
+    div[data-testid="stFileUploader"]:hover {
+        border: 1px solid #00E6F6;
+    }
+
     .stButton>button {
         background: linear-gradient(90deg, #00E6F6 0%, #007BFF 100%);
         color: white;
@@ -70,6 +78,7 @@ st.markdown("""
         transform: scale(1.05);
         box-shadow: 0 0 20px rgba(0, 230, 246, 0.5);
     }
+
     .result-table {
         border-collapse: collapse;
         width: 100%;
@@ -91,10 +100,12 @@ st.markdown("""
         text-align: center;
         border: 1px solid #2a3b6b;
     }
+
     section[data-testid="stSidebar"] {
         background-color: #0E1428;
         color: white;
     }
+
     .footer {
         text-align: center;
         font-size: 15px;
@@ -103,6 +114,7 @@ st.markdown("""
         font-weight: 600;
         animation: pulseGlow 2.5s infinite alternate;
     }
+
     @keyframes pulseGlow {
         0% {text-shadow: 0 0 8px #00E6F6;}
         50% {text-shadow: 0 0 18px #007BFF;}
@@ -114,10 +126,10 @@ st.markdown("""
 # ---------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------
-st.markdown("<h1>💳 SureFinance Credit Card Statement Parser</h1>", unsafe_allow_html=True)
+st.markdown("<h1>💳 Sure Financial Credit Card Statement Parser</h1>", unsafe_allow_html=True)
 st.markdown("""
 <div class="highlight-text">
-✨ <b>Now extracts transactions, due amounts & card details with AI precision!</b> ✨
+✨ <b>Now supports credit card variant, minimum due, and full transaction extraction!</b> ✨
 </div>
 """, unsafe_allow_html=True)
 
@@ -139,8 +151,8 @@ with st.sidebar:
 
     issuer = st.checkbox("Issuer (Bank Name)", value=True)
     customer = st.checkbox("Customer Name", value=True)
-    card_variant = st.checkbox("Credit Card Variant", value=True)
     card_last = st.checkbox("Card Last 4 Digits", value=True)
+    card_variant = st.checkbox("Credit Card Variant", value=True)
     bill_from = st.checkbox("Billing Cycle From", value=True)
     bill_to = st.checkbox("Billing Cycle To", value=True)
     due_date = st.checkbox("Payment Due Date", value=True)
@@ -152,8 +164,8 @@ selected_fields = [
     f for f, v in {
         "issuer (bank name)": issuer,
         "customer name": customer,
-        "credit card variant": card_variant,
         "card last 4 digits": card_last,
+        "credit card variant": card_variant,
         "billing cycle from": bill_from,
         "billing cycle to": bill_to,
         "payment due date": due_date,
@@ -198,23 +210,18 @@ extract_btn = st.button("🚀 Extract Data")
 
 if extract_btn and uploaded_file:
     with st.spinner("📄 Reading and analyzing your statement..."):
-        pdf_bytes = uploaded_file.read()
-        pdf_text = extract_text_from_pdf(pdf_bytes)
-
-        # --- PDF Preview (extra feature)
-        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            st.caption("🖼️ Preview of Page 1:")
-            st.image(pdf.pages[0].to_image(resolution=200).original, use_container_width=True)
+        pdf_text = extract_text_from_pdf(uploaded_file.read())
 
         prompt = f"""
 You are an expert financial document parser.
 Extract the following fields from this credit card statement:
 {', '.join(selected_fields)}.
 
-If 'transaction information' is selected, extract it as a list of objects with keys:
+If 'transaction information' is included, return it as a list of JSON objects with keys:
 ["date", "description", "amount", "type (credit/debit)"].
 
-Format output strictly as valid JSON only. No text outside the JSON.
+Return only one valid JSON object with these exact keys.
+Do not include any explanation or markdown.
 
 Statement text:
 {pdf_text[:7000]}
@@ -232,7 +239,7 @@ Statement text:
             result = {"raw_output": response_text}
 
         # ---------------------------------------------------------
-        # DISPLAY RESULTS
+        # SHOW RESULTS
         # ---------------------------------------------------------
         st.markdown("### ✅ Extracted Summary")
 
@@ -240,59 +247,44 @@ Statement text:
             st.warning("⚠️ Model returned unstructured data:")
             st.text(result["raw_output"])
         else:
-            # Transactions
-            if "transaction information" in result and isinstance(result["transaction information"], list):
-                st.markdown("### 🧾 Transaction Details")
-                tx_df = pd.DataFrame(result["transaction information"])
-                st.dataframe(tx_df, use_container_width=True)
-                result.pop("transaction information", None)
+            # ✅ Main Summary Table
+            summary_result = result.copy()
+            transactions_data = summary_result.pop("transaction information", None)
 
-                # --- Optional analytics ---
-                try:
-                    tx_df['amount'] = tx_df['amount'].astype(float)
-                    st.markdown("#### 📊 Transaction Summary")
-                    st.write(f"**Total Transactions:** {len(tx_df)}")
-                    st.write(f"**Total Spend:** ₹{tx_df[tx_df['type (credit/debit)']=='debit']['amount'].sum():,.2f}")
-                    st.write(f"**Total Credits:** ₹{tx_df[tx_df['type (credit/debit)']=='credit']['amount'].sum():,.2f}")
-                except:
-                    pass
-
-            # Summary info
             html = "<table class='result-table'><tr>"
-            for key in result.keys():
+            for key in summary_result.keys():
                 html += f"<th>{key}</th>"
             html += "</tr><tr>"
-            for value in result.values():
+            for value in summary_result.values():
                 html += f"<td>{value}</td>"
             html += "</tr></table>"
             st.markdown(html, unsafe_allow_html=True)
 
+            # ✅ Show Transactions Below (if present)
+            if transactions_data:
+                try:
+                    st.markdown("### 🧾 Transaction Details")
+                    tx_df = pd.DataFrame(transactions_data)
+                    st.dataframe(tx_df, use_container_width=True)
+                except Exception:
+                    st.warning("⚠️ Could not display transaction data properly.")
+
         # ---------------------------------------------------------
-        # DOWNLOAD BUTTONS
+        # DOWNLOAD BUTTON
         # ---------------------------------------------------------
         df = pd.DataFrame([result])
         st.download_button(
-            "💾 Download Summary (CSV)",
+            "💾 Download Extracted Data (CSV)",
             df.to_csv(index=False).encode("utf-8"),
             file_name=f"{uploaded_file.name}_summary.csv",
             mime="text/csv"
         )
-
-        if "transaction information" in locals():
-            st.download_button(
-                "📥 Download Transactions (CSV)",
-                tx_df.to_csv(index=False).encode("utf-8"),
-                file_name=f"{uploaded_file.name}_transactions.csv",
-                mime="text/csv"
-            )
-
-        st.success("✅ Extraction complete!")
 
 # ---------------------------------------------------------
 # FOOTER
 # ---------------------------------------------------------
 st.markdown("""
 <div class="footer">
-🚀 Developed with ❤️ by <b>Om Maurya</b> | Powered by <b>Groq Llama-3.1-8B</b> | Built on Streamlit ✨
+🚀 Developed with ❤️ by <b>Om</b> | Powered by <b>Groq’s Llama-3.1-8B-Instant</b> | Streamlit ✨
 </div>
 """, unsafe_allow_html=True)
