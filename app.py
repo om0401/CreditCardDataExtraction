@@ -1,6 +1,5 @@
 import io
 import os
-import re
 import json
 import pdfplumber
 import pytesseract
@@ -23,7 +22,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# CUSTOM STYLES (UI ONLY)
+# CUSTOM STYLES
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -64,6 +63,7 @@ st.markdown("""
         transition: 0.2s;
         box-shadow: 0 0 10px rgba(0, 230, 246, 0.3);
     }
+
     .stButton>button:hover {
         transform: scale(1.05);
         box-shadow: 0 0 20px rgba(0, 230, 246, 0.5);
@@ -79,6 +79,7 @@ st.markdown("""
         margin-top: 15px;
         box-shadow: 0 0 15px rgba(0, 0, 0, 0.4);
     }
+
     .result-table th {
         background-color: #007BFF;
         color: white;
@@ -116,15 +117,15 @@ st.markdown("""
 # ---------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------
-st.markdown("<h1>💳 Sure Financial Credit Card Statement Parser</h1>", unsafe_allow_html=True)
+st.markdown("<h1>💳 Sure Financial Credit Card Parser</h1>", unsafe_allow_html=True)
 st.markdown("""
 <div class="highlight-text">
-✨ <b>Extracts summary using Groq AI and transactions using intelligent regex parsing!</b> ✨
+✨ <b>AI-powered parsing — structured summary & transactions in one click</b> ✨
 </div>
 """, unsafe_allow_html=True)
 
 # ---------------------------------------------------------
-# VERIFY KEY
+# VERIFY API KEY
 # ---------------------------------------------------------
 if not groq_key:
     st.error("⚠️ GROQ_API_KEY missing in `.env`. Please add it.")
@@ -133,12 +134,10 @@ if not groq_key:
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
 
 # ---------------------------------------------------------
-# SIDEBAR FIELD SELECTION
+# SIDEBAR SETTINGS
 # ---------------------------------------------------------
 with st.sidebar:
     st.header("🧠 Extraction Settings")
-    st.caption("Select the fields you want to extract:")
-
     issuer = st.checkbox("Issuer (Bank Name)", value=True)
     customer = st.checkbox("Customer Name", value=True)
     card_last = st.checkbox("Card Last 4 Digits", value=True)
@@ -152,16 +151,16 @@ with st.sidebar:
 
 selected_fields = [
     f for f, v in {
-        "issuer (bank name)": issuer,
-        "customer name": customer,
-        "card last 4 digits": card_last,
-        "credit card variant": card_variant,
-        "billing cycle from": bill_from,
-        "billing cycle to": bill_to,
-        "payment due date": due_date,
-        "total amount due": total_due,
-        "minimum amount due": min_due,
-        "transaction information": transactions
+        "issuer": issuer,
+        "customer_name": customer,
+        "card_last_4_digits": card_last,
+        "credit_card_variant": card_variant,
+        "billing_cycle_from": bill_from,
+        "billing_cycle_to": bill_to,
+        "payment_due_date": due_date,
+        "total_amount_due": total_due,
+        "minimum_amount_due": min_due,
+        "transaction_information": transactions
     }.items() if v
 ]
 
@@ -171,9 +170,10 @@ selected_fields = [
 uploaded_file = st.file_uploader("📄 Upload Credit Card Statement (PDF)", type=["pdf"])
 
 # ---------------------------------------------------------
-# HELPER FUNCTIONS
+# FUNCTIONS
 # ---------------------------------------------------------
 def extract_text_from_pdf(file_bytes: bytes) -> str:
+    """Extract text from each page using pdfplumber + OCR fallback"""
     texts = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
@@ -184,51 +184,36 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
             texts.append(t)
     return "\n".join(texts)
 
-def query_groq(prompt: str) -> str:
-    completion = client.chat.completions.create(
+def query_groq_for_json(pdf_text: str) -> dict:
+    """Ask Groq model to return structured JSON data."""
+    prompt = f"""
+You are a financial data extraction system.
+From this credit card statement, extract the following fields:
+{', '.join(selected_fields)}.
+
+For "transaction_information", return a list of dictionaries with keys:
+["date", "description", "amount", "type (credit/debit)"].
+
+Return a **valid JSON** object only, no markdown or explanations.
+
+Statement text:
+{pdf_text[:7000]}
+"""
+    response = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=800
+        max_tokens=1500
     )
-    return completion.choices[0].message.content
+    response_text = response.choices[0].message.content
 
-def extract_transactions_regex(text: str):
-    """Improved regex-based transaction extraction for ICICI, HDFC, IDFC formats."""
-    clean_text = (
-        text.replace("₹", "")
-        .replace("Rs.", "")
-        .replace("INR", "")
-        .replace(",", "")
-        .replace("CR", " CR")
-        .replace("Cr", " CR")
-        .replace("Dr", " DR")
-    )
-
-    pattern = re.compile(
-        r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+([A-Za-z0-9\-\&\.,/() ]{5,80}?)\s+([0-9]+\.\d{2}|[0-9]+)\s*(CR|DR)?',
-        re.IGNORECASE
-    )
-
-    transactions = []
-    for match in pattern.findall(clean_text):
-        date, desc, amt, tx_type = match
-        tx_type = tx_type.strip().lower() if tx_type else "debit"
-        tx_type = "credit" if "cr" in tx_type else "debit"
-        desc = re.sub(r'(Ref#.*|Amortization.*|Page.*|\bIN\b|\bRs\b)', '', desc).strip()
-        transactions.append({
-            "date": date.strip(),
-            "description": desc.strip(),
-            "amount": float(amt),
-            "type": tx_type
-        })
-
-    if transactions:
-        df = pd.DataFrame(transactions).drop_duplicates()
-        df = df.sort_values(by="date")
-        return df
-    else:
-        return None
+    # Extract JSON safely
+    try:
+        json_part = response_text.split("{", 1)[1].rsplit("}", 1)[0]
+        result = json.loads("{" + json_part + "}")
+        return result
+    except Exception:
+        return {"raw_output": response_text}
 
 # ---------------------------------------------------------
 # MAIN WORKFLOW
@@ -239,66 +224,44 @@ if extract_btn and uploaded_file:
     with st.spinner("📄 Reading and analyzing your statement..."):
         pdf_text = extract_text_from_pdf(uploaded_file.read())
 
-        # --- Groq for summary data only ---
-        prompt = f"""
-You are a financial document parser.
-Extract the following fields from this credit card statement as valid JSON:
-issuer, customer_name, card_last_4_digits, credit_card_variant,
-billing_cycle_from, billing_cycle_to, payment_due_date,
-total_amount_due, minimum_amount_due.
+        result = query_groq_for_json(pdf_text)
 
-Return only valid JSON, no explanations.
-Statement text:
-{pdf_text[:7000]}
-"""
-        try:
-            response_text = query_groq(prompt)
-        except Exception as e:
-            st.error(f"❌ Groq API Error: {e}")
-            st.stop()
-
-        try:
-            json_part = response_text.split("{", 1)[1].rsplit("}", 1)[0]
-            result = json.loads("{" + json_part + "}")
-        except Exception:
-            result = {"raw_output": response_text}
-
-        # ---------------------------------------------------------
-        # DISPLAY SUMMARY TABLE
-        # ---------------------------------------------------------
+        # SUMMARY TABLE
         st.markdown("### ✅ Extracted Summary")
-
         if "raw_output" in result:
             st.warning("⚠️ Model returned unstructured data:")
             st.text(result["raw_output"])
         else:
+            summary_result = {k: v for k, v in result.items() if k != "transaction_information"}
+
             html = "<table class='result-table'><tr>"
-            for key in result.keys():
+            for key in summary_result.keys():
                 html += f"<th>{key}</th>"
             html += "</tr><tr>"
-            for value in result.values():
+            for value in summary_result.values():
                 html += f"<td>{value}</td>"
             html += "</tr></table>"
             st.markdown(html, unsafe_allow_html=True)
 
-        # ---------------------------------------------------------
-        # DISPLAY TRANSACTION TABLE (Regex-based)
-        # ---------------------------------------------------------
-        if transactions:
-            st.markdown("### 🧾 Transaction Details (Regex Extraction)")
-            tx_df = extract_transactions_regex(pdf_text)
-            if tx_df is not None and not tx_df.empty:
+            # TRANSACTION TABLE
+            if "transaction_information" in result and isinstance(result["transaction_information"], list):
+                st.markdown("### 🧾 Transaction Details")
+                tx_df = pd.DataFrame(result["transaction_information"])
                 st.dataframe(tx_df, use_container_width=True)
-            else:
-                st.warning("⚠️ No transaction patterns detected in this file.")
 
-        # ---------------------------------------------------------
+                # Optional CSV download
+                st.download_button(
+                    "📥 Download Transactions (CSV)",
+                    tx_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{uploaded_file.name}_transactions.csv",
+                    mime="text/csv"
+                )
+
         # DOWNLOAD SUMMARY
-        # ---------------------------------------------------------
-        df = pd.DataFrame([result])
+        df_summary = pd.DataFrame([result])
         st.download_button(
-            "💾 Download Extracted Summary (CSV)",
-            df.to_csv(index=False).encode("utf-8"),
+            "💾 Download Summary (CSV)",
+            df_summary.to_csv(index=False).encode("utf-8"),
             file_name=f"{uploaded_file.name}_summary.csv",
             mime="text/csv"
         )
@@ -308,6 +271,6 @@ Statement text:
 # ---------------------------------------------------------
 st.markdown("""
 <div class="footer">
-🚀 Developed with ❤️ by <b>Om</b> | Hybrid AI + Regex Credit Card Parser | Streamlit ✨
+🚀 Developed with ❤️ by <b>Om</b> | AI Extraction Powered by <b>Groq Llama-3.1</b> | Streamlit ✨
 </div>
 """, unsafe_allow_html=True)
