@@ -11,7 +11,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 
 # ---------------------------------------------------------
-# SETUP
+# SETUP & CONFIG
 # ---------------------------------------------------------
 load_dotenv()
 groq_key = os.getenv("GROQ_API_KEY")
@@ -23,7 +23,7 @@ st.set_page_config(
 )
 
 # ---------------------------------------------------------
-# CUSTOM STYLES
+# CUSTOM STYLES (UI ONLY)
 # ---------------------------------------------------------
 st.markdown("""
 <style>
@@ -32,6 +32,7 @@ st.markdown("""
         color: #FFFFFF;
         font-family: 'Poppins', sans-serif;
     }
+
     h1 {
         color: #00E6F6 !important;
         text-align: center;
@@ -39,6 +40,7 @@ st.markdown("""
         font-size: 2.4em !important;
         margin-bottom: 0.3em !important;
     }
+
     .highlight-text {
         text-align: center;
         font-size: 22px;
@@ -46,8 +48,12 @@ st.markdown("""
         background: linear-gradient(90deg, #00E6F6, #007BFF);
         -webkit-background-clip: text;
         -webkit-text-fill-color: transparent;
+        letter-spacing: 0.4px;
+        animation: fadeIn 1.5s ease-in-out;
+        margin-top: -10px;
         margin-bottom: 25px;
     }
+
     .stButton>button {
         background: linear-gradient(90deg, #00E6F6 0%, #007BFF 100%);
         color: white;
@@ -56,11 +62,40 @@ st.markdown("""
         padding: 0.6em 1.5em;
         font-weight: 600;
         transition: 0.2s;
+        box-shadow: 0 0 10px rgba(0, 230, 246, 0.3);
     }
     .stButton>button:hover {
         transform: scale(1.05);
         box-shadow: 0 0 20px rgba(0, 230, 246, 0.5);
     }
+
+    .result-table {
+        border-collapse: collapse;
+        width: 100%;
+        background-color: #11182E;
+        color: #f8f8f8;
+        border-radius: 12px;
+        overflow: hidden;
+        margin-top: 15px;
+        box-shadow: 0 0 15px rgba(0, 0, 0, 0.4);
+    }
+    .result-table th {
+        background-color: #007BFF;
+        color: white;
+        padding: 12px;
+        text-align: center;
+    }
+    .result-table td {
+        padding: 10px 15px;
+        text-align: center;
+        border: 1px solid #2a3b6b;
+    }
+
+    section[data-testid="stSidebar"] {
+        background-color: #0E1428;
+        color: white;
+    }
+
     .footer {
         text-align: center;
         font-size: 15px;
@@ -69,6 +104,7 @@ st.markdown("""
         font-weight: 600;
         animation: pulseGlow 2.5s infinite alternate;
     }
+
     @keyframes pulseGlow {
         0% {text-shadow: 0 0 8px #00E6F6;}
         50% {text-shadow: 0 0 18px #007BFF;}
@@ -80,11 +116,10 @@ st.markdown("""
 # ---------------------------------------------------------
 # HEADER
 # ---------------------------------------------------------
-st.markdown("<h1>💳 Sure Financial Credit Card Parser</h1>", unsafe_allow_html=True)
+st.markdown("<h1>💳 Sure Financial Credit Card Statement Parser</h1>", unsafe_allow_html=True)
 st.markdown("""
 <div class="highlight-text">
-<b>AI + Python Hybrid Parser for Credit Card Statements</b><br>
-✨ Auto extracts summary & transaction data — even when model output is unstructured ✨
+✨ <b>Extracts summary using Groq API and transactions using local pattern recognition!</b> ✨
 </div>
 """, unsafe_allow_html=True)
 
@@ -92,10 +127,43 @@ st.markdown("""
 # VERIFY KEY
 # ---------------------------------------------------------
 if not groq_key:
-    st.error("⚠️ GROQ_API_KEY missing in `.env`")
+    st.error("⚠️ GROQ_API_KEY missing in `.env`. Please add it.")
     st.stop()
 
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=groq_key)
+
+# ---------------------------------------------------------
+# SIDEBAR FIELD SELECTION
+# ---------------------------------------------------------
+with st.sidebar:
+    st.header("🧠 Extraction Settings")
+    st.caption("Select the fields you want to extract:")
+
+    issuer = st.checkbox("Issuer (Bank Name)", value=True)
+    customer = st.checkbox("Customer Name", value=True)
+    card_last = st.checkbox("Card Last 4 Digits", value=True)
+    card_variant = st.checkbox("Credit Card Variant", value=True)
+    bill_from = st.checkbox("Billing Cycle From", value=True)
+    bill_to = st.checkbox("Billing Cycle To", value=True)
+    due_date = st.checkbox("Payment Due Date", value=True)
+    total_due = st.checkbox("Total Amount Due", value=True)
+    min_due = st.checkbox("Minimum Amount Due", value=True)
+    transactions = st.checkbox("Transaction Information", value=True)
+
+selected_fields = [
+    f for f, v in {
+        "issuer (bank name)": issuer,
+        "customer name": customer,
+        "card last 4 digits": card_last,
+        "credit card variant": card_variant,
+        "billing cycle from": bill_from,
+        "billing cycle to": bill_to,
+        "payment due date": due_date,
+        "total amount due": total_due,
+        "minimum amount due": min_due,
+        "transaction information": transactions
+    }.items() if v
+]
 
 # ---------------------------------------------------------
 # FILE UPLOAD
@@ -106,7 +174,6 @@ uploaded_file = st.file_uploader("📄 Upload Credit Card Statement (PDF)", type
 # HELPER FUNCTIONS
 # ---------------------------------------------------------
 def extract_text_from_pdf(file_bytes: bytes) -> str:
-    """Extract text from PDF, fallback to OCR if needed."""
     texts = []
     with pdfplumber.open(io.BytesIO(file_bytes)) as pdf:
         for page in pdf.pages:
@@ -118,55 +185,49 @@ def extract_text_from_pdf(file_bytes: bytes) -> str:
     return "\n".join(texts)
 
 def query_groq(prompt: str) -> str:
-    """Send query to Groq model."""
     completion = client.chat.completions.create(
         model="llama-3.1-8b-instant",
         messages=[{"role": "user", "content": prompt}],
         temperature=0.2,
-        max_tokens=1000
+        max_tokens=800
     )
     return completion.choices[0].message.content
 
-def fallback_transaction_parser(raw_text: str) -> pd.DataFrame:
-    """
-    Fallback transaction extraction using regex patterns.
-    Matches lines with date, description, and amount.
-    """
+def extract_transactions_regex(text: str):
+    """Regex-based fallback for transaction table extraction."""
     pattern = re.compile(
         r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+([A-Za-z0-9\s\-\&\.,]+?)\s+(-?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)"
     )
     transactions = []
-    for match in pattern.findall(raw_text):
+    for match in pattern.findall(text):
         date, desc, amt = match
+        amt_clean = amt.replace(",", "")
         transactions.append({
             "date": date.strip(),
             "description": desc.strip(),
-            "amount": amt.strip(),
-            "type": "credit" if "-" in amt else "debit"
+            "amount": amt_clean,
+            "type": "credit" if "-" in amt_clean else "debit"
         })
-    return pd.DataFrame(transactions) if transactions else pd.DataFrame()
+    return pd.DataFrame(transactions) if transactions else None
 
 # ---------------------------------------------------------
-# MAIN LOGIC
+# MAIN WORKFLOW
 # ---------------------------------------------------------
 extract_btn = st.button("🚀 Extract Data")
 
 if extract_btn and uploaded_file:
-    with st.spinner("📄 Processing your statement..."):
-        pdf_bytes = uploaded_file.read()
-        pdf_text = extract_text_from_pdf(pdf_bytes)
+    with st.spinner("📄 Reading and analyzing your statement..."):
+        pdf_text = extract_text_from_pdf(uploaded_file.read())
 
-        # --- API Prompt ---
+        # --- Prompt for Groq (only for summary fields) ---
         prompt = f"""
-You are an expert financial document parser.
-Extract the following information as JSON:
+You are a financial document parser.
+Extract only the following fields from this credit card statement as valid JSON:
 issuer, customer_name, card_last_4_digits, credit_card_variant,
 billing_cycle_from, billing_cycle_to, payment_due_date,
-total_amount_due, minimum_amount_due, transaction_information
-(transaction_information should be a list of objects with
-["date","description","amount","type"]).
+total_amount_due, minimum_amount_due.
 
-Return valid JSON only, no explanations.
+Return one valid JSON object. Do not include transaction data.
 
 Statement text:
 {pdf_text[:7000]}
@@ -177,69 +238,58 @@ Statement text:
             st.error(f"❌ Groq API Error: {e}")
             st.stop()
 
-        # Try JSON parsing
+        # Parse summary data
         try:
             json_part = response_text.split("{", 1)[1].rsplit("}", 1)[0]
             result = json.loads("{" + json_part + "}")
-            structured = True
         except Exception:
-            structured = False
             result = {"raw_output": response_text}
 
         # ---------------------------------------------------------
-        # DISPLAY
+        # SHOW SUMMARY TABLE
         # ---------------------------------------------------------
-        st.markdown("### ✅ Extracted Results")
+        st.markdown("### ✅ Extracted Summary")
 
-        if structured and "transaction_information" in result:
-            # --- Summary ---
-            summary_data = {
-                k: v for k, v in result.items()
-                if k != "transaction_information"
-            }
-            st.markdown("#### 📋 Statement Summary")
-            st.dataframe(pd.DataFrame([summary_data]), use_container_width=True)
-
-            # --- Transactions ---
-            tx_data = result["transaction_information"]
-            if isinstance(tx_data, list) and len(tx_data) > 0:
-                st.markdown("#### 🧾 Transaction Details")
-                tx_df = pd.DataFrame(tx_data)
-                st.dataframe(tx_df, use_container_width=True)
-            else:
-                st.info("No structured transaction data found.")
+        if "raw_output" in result:
+            st.warning("⚠️ Model returned unstructured data:")
+            st.text(result["raw_output"])
         else:
-            # --- Fallback mode ---
-            st.warning("⚠️ Model returned unstructured output — fallback parsing activated.")
-            st.markdown("#### 📋 Extracted Summary (Text Mode)")
-            summary_lines = [line for line in pdf_text.split("\n") if any(x in line.lower() for x in [
-                "bank", "due", "amount", "name", "credit card"
-            ])]
-            summary_text = "\n".join(summary_lines[:15])
-            st.text(summary_text.strip())
+            html = "<table class='result-table'><tr>"
+            for key in result.keys():
+                html += f"<th>{key}</th>"
+            html += "</tr><tr>"
+            for value in result.values():
+                html += f"<td>{value}</td>"
+            html += "</tr></table>"
+            st.markdown(html, unsafe_allow_html=True)
 
-            st.markdown("#### 🧾 Extracted Transaction Table (Regex Mode)")
-            tx_df = fallback_transaction_parser(pdf_text)
-            if not tx_df.empty:
+        # ---------------------------------------------------------
+        # TRANSACTION DATA EXTRACTION (Regex-based)
+        # ---------------------------------------------------------
+        if transactions:
+            st.markdown("### 🧾 Transaction Details (Extracted via Regex)")
+            tx_df = extract_transactions_regex(pdf_text)
+            if tx_df is not None and not tx_df.empty:
                 st.dataframe(tx_df, use_container_width=True)
             else:
-                st.info("No transaction patterns detected. Try clearer PDF text.")
+                st.warning("⚠️ No clear transaction patterns detected.")
 
-        # --- Download buttons ---
-        if structured:
-            df = pd.DataFrame([result])
-            st.download_button(
-                "💾 Download Summary (CSV)",
-                df.to_csv(index=False).encode("utf-8"),
-                file_name="statement_summary.csv",
-                mime="text/csv"
-            )
+        # ---------------------------------------------------------
+        # DOWNLOAD BUTTON
+        # ---------------------------------------------------------
+        df = pd.DataFrame([result])
+        st.download_button(
+            "💾 Download Extracted Summary (CSV)",
+            df.to_csv(index=False).encode("utf-8"),
+            file_name=f"{uploaded_file.name}_summary.csv",
+            mime="text/csv"
+        )
 
 # ---------------------------------------------------------
 # FOOTER
 # ---------------------------------------------------------
 st.markdown("""
 <div class="footer">
-🚀 Developed with ❤️ by <b>Om</b> | Hybrid Parsing using <b>Groq Llama-3.1</b> + Regex AI | Streamlit ✨
+🚀 Developed with ❤️ by <b>Om</b> | Hybrid: Groq API + Regex Parser | Streamlit ✨
 </div>
 """, unsafe_allow_html=True)
