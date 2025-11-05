@@ -119,7 +119,7 @@ st.markdown("""
 st.markdown("<h1>💳 Sure Financial Credit Card Statement Parser</h1>", unsafe_allow_html=True)
 st.markdown("""
 <div class="highlight-text">
-✨ <b>Extracts summary using Groq API and transactions using local pattern recognition!</b> ✨
+✨ <b>Extracts summary using Groq AI and transactions using intelligent regex parsing!</b> ✨
 </div>
 """, unsafe_allow_html=True)
 
@@ -194,21 +194,41 @@ def query_groq(prompt: str) -> str:
     return completion.choices[0].message.content
 
 def extract_transactions_regex(text: str):
-    """Regex-based fallback for transaction table extraction."""
-    pattern = re.compile(
-        r"(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+([A-Za-z0-9\s\-\&\.,]+?)\s+(-?\d{1,3}(?:,\d{3})*(?:\.\d{1,2})?)"
+    """Improved regex-based transaction extraction for ICICI, HDFC, IDFC formats."""
+    clean_text = (
+        text.replace("₹", "")
+        .replace("Rs.", "")
+        .replace("INR", "")
+        .replace(",", "")
+        .replace("CR", " CR")
+        .replace("Cr", " CR")
+        .replace("Dr", " DR")
     )
+
+    pattern = re.compile(
+        r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})\s+([A-Za-z0-9\-\&\.,/() ]{5,80}?)\s+([0-9]+\.\d{2}|[0-9]+)\s*(CR|DR)?',
+        re.IGNORECASE
+    )
+
     transactions = []
-    for match in pattern.findall(text):
-        date, desc, amt = match
-        amt_clean = amt.replace(",", "")
+    for match in pattern.findall(clean_text):
+        date, desc, amt, tx_type = match
+        tx_type = tx_type.strip().lower() if tx_type else "debit"
+        tx_type = "credit" if "cr" in tx_type else "debit"
+        desc = re.sub(r'(Ref#.*|Amortization.*|Page.*|\bIN\b|\bRs\b)', '', desc).strip()
         transactions.append({
             "date": date.strip(),
             "description": desc.strip(),
-            "amount": amt_clean,
-            "type": "credit" if "-" in amt_clean else "debit"
+            "amount": float(amt),
+            "type": tx_type
         })
-    return pd.DataFrame(transactions) if transactions else None
+
+    if transactions:
+        df = pd.DataFrame(transactions).drop_duplicates()
+        df = df.sort_values(by="date")
+        return df
+    else:
+        return None
 
 # ---------------------------------------------------------
 # MAIN WORKFLOW
@@ -219,16 +239,15 @@ if extract_btn and uploaded_file:
     with st.spinner("📄 Reading and analyzing your statement..."):
         pdf_text = extract_text_from_pdf(uploaded_file.read())
 
-        # --- Prompt for Groq (only for summary fields) ---
+        # --- Groq for summary data only ---
         prompt = f"""
 You are a financial document parser.
-Extract only the following fields from this credit card statement as valid JSON:
+Extract the following fields from this credit card statement as valid JSON:
 issuer, customer_name, card_last_4_digits, credit_card_variant,
 billing_cycle_from, billing_cycle_to, payment_due_date,
 total_amount_due, minimum_amount_due.
 
-Return one valid JSON object. Do not include transaction data.
-
+Return only valid JSON, no explanations.
 Statement text:
 {pdf_text[:7000]}
 """
@@ -238,7 +257,6 @@ Statement text:
             st.error(f"❌ Groq API Error: {e}")
             st.stop()
 
-        # Parse summary data
         try:
             json_part = response_text.split("{", 1)[1].rsplit("}", 1)[0]
             result = json.loads("{" + json_part + "}")
@@ -246,7 +264,7 @@ Statement text:
             result = {"raw_output": response_text}
 
         # ---------------------------------------------------------
-        # SHOW SUMMARY TABLE
+        # DISPLAY SUMMARY TABLE
         # ---------------------------------------------------------
         st.markdown("### ✅ Extracted Summary")
 
@@ -264,18 +282,18 @@ Statement text:
             st.markdown(html, unsafe_allow_html=True)
 
         # ---------------------------------------------------------
-        # TRANSACTION DATA EXTRACTION (Regex-based)
+        # DISPLAY TRANSACTION TABLE (Regex-based)
         # ---------------------------------------------------------
         if transactions:
-            st.markdown("### 🧾 Transaction Details (Extracted via Regex)")
+            st.markdown("### 🧾 Transaction Details (Regex Extraction)")
             tx_df = extract_transactions_regex(pdf_text)
             if tx_df is not None and not tx_df.empty:
                 st.dataframe(tx_df, use_container_width=True)
             else:
-                st.warning("⚠️ No clear transaction patterns detected.")
+                st.warning("⚠️ No transaction patterns detected in this file.")
 
         # ---------------------------------------------------------
-        # DOWNLOAD BUTTON
+        # DOWNLOAD SUMMARY
         # ---------------------------------------------------------
         df = pd.DataFrame([result])
         st.download_button(
@@ -290,6 +308,6 @@ Statement text:
 # ---------------------------------------------------------
 st.markdown("""
 <div class="footer">
-🚀 Developed with ❤️ by <b>Om</b> | Hybrid: Groq API + Regex Parser | Streamlit ✨
+🚀 Developed with ❤️ by <b>Om</b> | Hybrid AI + Regex Credit Card Parser | Streamlit ✨
 </div>
 """, unsafe_allow_html=True)
